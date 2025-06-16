@@ -15,17 +15,12 @@ import java.util.concurrent.TimeUnit;
 
 @State(Scope.Thread)
 @Fork(value = 5, jvmArgsPrepend = "-Xmx128m")
-@Warmup(iterations = 5,  time = 500,   timeUnit = TimeUnit.MILLISECONDS)
+@Warmup(iterations = 5,  time = 500,  timeUnit = TimeUnit.MILLISECONDS)
 @Measurement(iterations = 10, time = 1,     timeUnit = TimeUnit.SECONDS)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 
 public class SelectBatch {
-
-  public enum Scenario { CACHED_REPEAT, VARYING_LENGTH }
-
-  @Param({ "CACHED_REPEAT", "VARYING_LENGTH" })
-  private Scenario scenario;
 
   @Param({"1", "100", "1000"})
   private int batchSize;
@@ -78,31 +73,27 @@ public class SelectBatch {
   }
 
   @Benchmark
-  public void benchSelect(Blackhole bh) throws SQLException {
-    switch (scenario) {
+  public void benchCachedRepeat(Blackhole bh) throws SQLException {
+    prepareExecute(cachedSql, batchSize, bh);
+  }
 
-    case CACHED_REPEAT:
-      try (PreparedStatement ps = connection.prepareStatement(cachedSql)) {
-        for (int idx = 1; idx <= batchSize; idx++) {
-          ps.setInt(idx, idx);
-        }
-        boolean hasResult = ps.execute();
-        bh.consume(hasResult);
-      }
-      break;
+  @Benchmark
+  public void benchVaryingLength(Blackhole bh) throws SQLException {
+    for (int len = 1; len <= batchSize; len++) {
+      String sql = varyingSqls[len - 1];
+     // for (int counter =  0; counter < 6; ++counter) {
+        prepareExecute(sql, len, bh);
+     // }
+    }
+  }
 
-    case VARYING_LENGTH:
-      for (int len = 1; len <= batchSize; len++) {
-        String sql = varyingSqls[len - 1];
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-          for (int idx = 1; idx <= len; idx++) {
-            ps.setInt(idx, idx);
-          }
-          boolean hasResult = ps.execute();
-          bh.consume(hasResult);
-        }
+  private void prepareExecute(String sql, int size, Blackhole bh) throws SQLException {
+    try (PreparedStatement ps = connection.prepareStatement(sql)) {
+      for (int idx = 1; idx <= size; idx++) {
+        ps.setInt(idx, idx);
       }
-      break;
+      boolean hasResult = ps.execute();
+      bh.consume(hasResult);
     }
   }
 
@@ -116,4 +107,3 @@ public class SelectBatch {
     new Runner(opt).run();
   }
 }
-
