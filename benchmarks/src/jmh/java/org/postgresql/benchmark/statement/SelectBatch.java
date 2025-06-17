@@ -1,5 +1,6 @@
 package org.postgresql.benchmark.statement;
 
+import org.postgresql.PGConnection;
 import org.postgresql.test.TestUtil;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -9,91 +10,112 @@ import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
+import org.openjdk.jmh.runner.options.VerboseMode;
 
 import java.sql.*;
 import java.util.concurrent.TimeUnit;
 
-@State(Scope.Thread)
-@Fork(value = 5, jvmArgsPrepend = "-Xmx128m")
-@Warmup(iterations = 5,  time = 500,  timeUnit = TimeUnit.MILLISECONDS)
-@Measurement(iterations = 10, time = 1,     timeUnit = TimeUnit.SECONDS)
-@BenchmarkMode(Mode.AverageTime)
-@OutputTimeUnit(TimeUnit.MICROSECONDS)
-
+@BenchmarkMode(Mode.Throughput)
+@Fork(1)
+@Warmup(iterations = 10, time = 5, timeUnit = TimeUnit.MINUTES)
+@Measurement(iterations = 5, time = 10, timeUnit = TimeUnit.SECONDS)
 public class SelectBatch {
 
-  @Param({"1", "100", "1000"})
-  private int batchSize;
-
-  private Connection connection;
-  private final String tableName = "bench_select";
-  private String singleSql;
-  private String cachedSql;
-  private String[] varyingSqls;
-
-  @Setup(Level.Trial)
-  public void setUp() throws SQLException {
-    connection = TestUtil.openDB();
-    try (Statement st = connection.createStatement()) {
-      st.execute("DROP TABLE IF EXISTS " + tableName);
-      st.execute("CREATE TABLE " + tableName + " (id INT PRIMARY KEY, val TEXT)");
-    }
-    try (PreparedStatement ins = connection.prepareStatement(
-        "INSERT INTO " + tableName + "(id,val) VALUES (?,?)")) {
-      for (int i = 1; i <= batchSize; i++) {
-        ins.setInt(1, i);
-        ins.setString(2, "строка_" + i);
-        ins.addBatch();
+  @State(Scope.Benchmark)
+  public static class SchemaState {
+    @Setup(Level.Trial)
+    public void init() throws SQLException {
+      try (Connection conn = TestUtil.openDB();
+           Statement st = conn.createStatement();
+           PreparedStatement ins = conn.prepareStatement(
+               "INSERT INTO bench_select (id,val) VALUES (?,?)")) {
+        st.execute("DROP TABLE IF EXISTS bench_select");
+        st.execute("CREATE TABLE bench_select (id INT PRIMARY KEY, val TEXT)");
+        for (int i = 1; i <= 1000; i++) {
+          ins.setInt(1, i);
+          ins.setString(2, "строка_" + i);
+          ins.addBatch();
+        }
+        ins.executeBatch();
       }
-      ins.executeBatch();
-    }
-    singleSql = "SELECT val FROM " + tableName + " WHERE id = ?";
-    {
-      StringBuilder sb = new StringBuilder();
-      for (int i = 0; i < batchSize; i++) {
-        if (i > 0) sb.append(';');
-        sb.append(singleSql);
-      }
-      cachedSql = sb.toString();
-    }
-    varyingSqls = new String[batchSize];
-    for (int len = 1; len <= batchSize; len++) {
-      StringBuilder sb = new StringBuilder();
-      for (int j = 0; j < len; j++) {
-        if (j > 0) sb.append(';');
-        sb.append(singleSql);
-      }
-      varyingSqls[len - 1] = sb.toString();
     }
   }
 
-  @TearDown(Level.Trial)
-  public void tearDown() throws SQLException {
-    connection.close();
+  @State(Scope.Thread)
+  public static class SimpleState {
+    Connection connection;
+    String sql = "SELECT val FROM bench_select WHERE id = ?";
+
+    @Setup(Level.Trial)
+    public void openConnection(SchemaState schema) throws SQLException {
+      connection = TestUtil.openDB();
+      ((PGConnection) connection).setPrepareThreshold(0);
+    }
+
+    @TearDown(Level.Trial)
+    public void closeConnection() throws SQLException {
+      connection.close();
+    }
+  }
+
+  @State(Scope.Thread)
+  public static class CompositeState {
+    Connection connection;
+    String[] sqls;
+
+    @Setup(Level.Trial)
+    public void init(SchemaState schema) throws SQLException {
+      connection = TestUtil.openDB();
+      ((PGConnection) connection).setPrepareThreshold(1);
+      sqls = new String[1000];
+      String template = "SELECT val FROM bench_select WHERE id = ?";
+      for (int len = 1; len <= 1000; len++) {
+        StringBuilder sb = new StringBuilder();
+        for (int j = 0; j < len; j++) {
+          if (j > 0) sb.append(';');
+          sb.append(template);
+        }
+        sqls[len - 1] = sb.toString();
+      }
+    }
+
+    @TearDown(Level.Trial)
+    public void closeConnection() throws SQLException {
+      connection.close();
+    }
   }
 
   @Benchmark
-  public void benchCachedRepeat(Blackhole bh) throws SQLException {
-    prepareExecute(cachedSql, batchSize, bh);
-  }
-
-  @Benchmark
-  public void benchVaryingLength(Blackhole bh) throws SQLException {
-    for (int len = 1; len <= batchSize; len++) {
-      String sql = varyingSqls[len - 1];
-     // for (int counter =  0; counter < 6; ++counter) {
-        prepareExecute(sql, len, bh);
-     // }
+  public void benchSimple(SimpleState s, Blackhole bh) throws SQLException {
+    try (PreparedStatement ps = s.connection.prepareStatement(s.sql)) {
+      ps.setInt(1, 1);
+      bh.consume(ps.execute());
+      try (ResultSet rs = ps.getResultSet()) {
+        while (rs.next()) bh.consume(rs.getString(1));
+      }
     }
   }
 
-  private void prepareExecute(String sql, int size, Blackhole bh) throws SQLException {
-    try (PreparedStatement ps = connection.prepareStatement(sql)) {
-      for (int idx = 1; idx <= size; idx++) {
-        ps.setInt(idx, idx);
+  @Benchmark
+  @OperationsPerInvocation(500500)
+  public void benchComposite(CompositeState s, Blackhole bh) throws SQLException {
+    for (int i = 0; i < 1000; i++) {
+      try (PreparedStatement ps = s.connection.prepareStatement(s.sqls[i])) {
+        for (int idx = 1; idx <= i + 1; idx++) {
+          ps.setInt(idx, idx);
+        }
+        boolean hasMore = ps.execute();
+        bh.consume(hasMore);
+        while (hasMore) {
+          try (ResultSet rs = ps.getResultSet()) {
+            while (rs.next()) {
+              bh.consume(rs.getString(1));
+            }
+          }
+          hasMore = ps.getMoreResults();
+          bh.consume(hasMore);
+        }
       }
-      boolean hasResult = ps.execute();
-      bh.consume(hasResult);
     }
   }
 
@@ -102,7 +124,6 @@ public class SelectBatch {
         .include(SelectBatch.class.getSimpleName())
         .addProfiler(GCProfiler.class)
         .addProfiler(FlightRecorderProfiler.class)
-        .detectJvmArgs()
         .build();
     new Runner(opt).run();
   }
