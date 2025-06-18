@@ -300,6 +300,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
         releaseQuery(cached);
       }
       subqueries[i] = (SimpleQuery) cached.query;
+      subqueries[i].addUsage();
       offset += nativeQuery.bindPositions.length;
     }
     return new CompositeQuery(subqueries, offsets);
@@ -1604,7 +1605,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
     query.setFields(null);
 
     String statementName = null;
-    if (!oneShot) {
+    if (!oneShot || query.getUseCounter() >= 5) {
       // Generate a statement name to use.
       statementName = "S_" + (nextUniqueID++);
 
