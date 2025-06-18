@@ -1605,7 +1605,7 @@ public class QueryExecutorImpl extends QueryExecutorBase {
     query.setFields(null);
 
     String statementName = null;
-    if (!oneShot || query.getUseCounter() >= 5) {
+    if (!oneShot || query.getUseCounter() >= PGProperty.PREPARE_THRESHOLD.getIntNoCheck(System.getProperties())) {
       // Generate a statement name to use.
       statementName = "S_" + (nextUniqueID++);
 
