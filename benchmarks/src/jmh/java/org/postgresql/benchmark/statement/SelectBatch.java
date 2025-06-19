@@ -17,8 +17,8 @@ import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.Throughput)
 @Fork(1)
-@Warmup(iterations = 10, time = 5, timeUnit = TimeUnit.MINUTES)
-@Measurement(iterations = 5, time = 10, timeUnit = TimeUnit.SECONDS)
+@Warmup(iterations = 10, time = 1, timeUnit = TimeUnit.MINUTES)
+@Measurement(iterations = 5, time = 30, timeUnit = TimeUnit.SECONDS)
 public class SelectBatch {
 
   @State(Scope.Benchmark)
@@ -44,12 +44,12 @@ public class SelectBatch {
   @State(Scope.Thread)
   public static class SimpleState {
     Connection connection;
+
     String sql = "SELECT val FROM bench_select WHERE id = ?";
 
     @Setup(Level.Trial)
     public void openConnection(SchemaState schema) throws SQLException {
       connection = TestUtil.openDB();
-      ((PGConnection) connection).setPrepareThreshold(0);
     }
 
     @TearDown(Level.Trial)
@@ -62,11 +62,13 @@ public class SelectBatch {
   public static class CompositeState {
     Connection connection;
     String[] sqls;
+    @Param({ "0", "1" })
+    public int threshold;
 
     @Setup(Level.Trial)
     public void init(SchemaState schema) throws SQLException {
       connection = TestUtil.openDB();
-      ((PGConnection) connection).setPrepareThreshold(1);
+      ((PGConnection) connection).setPrepareThreshold(threshold);
       sqls = new String[1000];
       String template = "SELECT val FROM bench_select WHERE id = ?";
       for (int len = 1; len <= 1000; len++) {
