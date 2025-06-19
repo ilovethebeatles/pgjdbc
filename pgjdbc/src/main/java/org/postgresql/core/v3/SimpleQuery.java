@@ -44,6 +44,14 @@ class SimpleQuery implements Query {
     this.sanitiserDisabled = sanitiserDisabled;
   }
 
+  public int getUseCounter() {
+    return useCounter;
+  }
+
+  public void addUsage() {
+    useCounter++;
+  }
+
   @Override
   public ParameterList createParameterList() {
     if (nativeQuery.bindPositions.length == 0) {
@@ -381,7 +389,7 @@ class SimpleQuery implements Query {
   private int @Nullable [] preparedTypes;
   private @Nullable BitSet unspecifiedParams;
   private short deallocateEpoch;
-
+  private int useCounter = 0;
   private @Nullable Integer cachedMaxResultRowSize;
 
   static final SimpleParameterList NO_PARAMETERS = new SimpleParameterList(0, null);
